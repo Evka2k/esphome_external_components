@@ -49,11 +49,16 @@ void EG1155Component::create_packet(uint8_t code, uint16_t cmd, uint8_t payload[
 }
 
 void EG1155Component::setup() {
+	if (this->initialized)
+		return;
+
 	if (this->set_voltage_number_)
 		((SetVoltage *)this->set_voltage_number_)->setup();
 	if (this->set_current_number_)
 		((SetCurrent *)this->set_current_number_)->setup();
+	this->initialized = true;
 }
+
 
 void EG1155Component::update() {
 	uint8_t payload[] = { 0x18 };
@@ -73,6 +78,7 @@ void EG1155Component::loop() {
 
 	if (!this->pq.empty() && !this->wait_response) {
 		auto v = this->pq.front();
+		log_hex("Send: ", v, '-');
 		this->write_array(v.data(), v.size());
 		this->wait_response = true;
 	}
@@ -114,61 +120,48 @@ bool EG1155Component::validate_message_() {
 }
 
 bool EG1155Component::verify_message_crc_() {
-	return (crc16_cms((uint8_t *)&this->rx_message_[0], this->rx_message_.size()) == 0);
+	return (crc16_cms((uint8_t *)this->rx_message_.data(), this->rx_message_.size()) == 0);
 }
 
 void EG1155Component::handle_packet_() {
-	uint8_t *data = this->rx_message_.data();
-	uint8_t code = data[2];
-	uint16_t cmd = *((uint16_t *) &data[3]);
-	uint16_t wait_cmd = 0;
-	uint8_t len = data[5];
 	struct eg1155_stats *s;
+	struct eg1155_packet *packet = (struct eg1155_packet*) this->rx_message_.data();
 
 	log_hex("D: ", this->rx_message_, ' ');
 
 	if (!this->pq.empty()) {
-		wait_cmd = *((uint16_t *)&(this->pq.front().data()[3]));
-		if (cmd == wait_cmd) {
+		if (packet->cmd == ((struct eg1155_packet *)this->pq.front().data())->cmd) {
+			ESP_LOGD(TAG, "ACK received");
 			this->pq.pop_front();
 			this->wait_response = false;
 		}
 	}
 
-	switch (cmd) {
+	switch (packet->cmd) {
 		case 0x00a:
-			s = (struct eg1155_stats *)&data[6];
-			if (this->voltage_sensor_)
-				this->voltage_sensor_->publish_state((float) s->voltage / 100);
-			if (this->battery_voltage_sensor_)
-				this->battery_voltage_sensor_->publish_state((float) s->v_bat / 100);
-			if (this->current_sensor_)
-				this->current_sensor_->publish_state((float) s->current / 100);
-			if (this->temperature_env_sensor_)
-				this->temperature_env_sensor_->publish_state(s->t_env);
-			if (this->temperature_mos_sensor_)
-				this->temperature_mos_sensor_->publish_state(s->t_mos);
-			if (this->capacity_sensor_)
-				this->capacity_sensor_->publish_state((float) s->capacity / 100);
-			if (this->ch_state_sensor_)
-				this->ch_state_sensor_->publish_state(s->ch_state);
-			if (this->b_progress_sensor_) {
-				switch (s->b_progress) {
-					case 0x01:
-						this->b_progress_sensor_->publish_state(25);
-						break;
-					case 0x03:
-						this->b_progress_sensor_->publish_state(50);
-						break;
-					case 0x07:
-						this->b_progress_sensor_->publish_state(75);
-						break;
-					case 0x0f:
-						this->b_progress_sensor_->publish_state(100);
-						break;
-					default:
-						this->b_progress_sensor_->publish_state(0);
-				}
+			s = (struct eg1155_stats *)&packet->data;
+			PUBLISH_SENSOR(voltage, ((float) s->voltage / 100));
+			PUBLISH_SENSOR(battery_voltage, ((float) s->v_bat / 100));
+			PUBLISH_SENSOR(current, ((float) s->current / 100));
+			PUBLISH_SENSOR(temperature_env, (s->t_env));
+			PUBLISH_SENSOR(temperature_mos, (s->t_mos));
+			PUBLISH_SENSOR(capacity, ((float) s->capacity / 100));
+			PUBLISH_SENSOR(ch_state, (s->ch_state));
+			switch (s->b_progress) {
+				case 0x01:
+					PUBLISH_SENSOR(b_progress, 25);
+					break;
+				case 0x03:
+					PUBLISH_SENSOR(b_progress, 50);
+					break;
+				case 0x07:
+					PUBLISH_SENSOR(b_progress, 75);
+					break;
+				case 0x0f:
+					PUBLISH_SENSOR(b_progress, 100);
+					break;
+				default:
+					PUBLISH_SENSOR(b_progress, 0);
 			}
 			ESP_LOGD(TAG, "r1:0x%04X r2:0x%04X r3:0x%04X r4:%d r5:0x%02X r6:0x%02X",
 					s->res1, s->res2, s->res3, s->res4, s->res5, s->res6);
@@ -206,7 +199,7 @@ void EG1155Component::handle_packet_() {
 		case 0xb901:
 			break;
 		default:
-			ESP_LOGE(TAG, "Unknown packet. CMD:%04X", cmd);
+			ESP_LOGE(TAG, "Unknown packet. CMD:%04X", packet->cmd);
 			log_hex("U: ", this->rx_message_, ' ');
 	}
 }

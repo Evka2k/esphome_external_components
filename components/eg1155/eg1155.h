@@ -17,7 +17,15 @@
 
 #include "esphome/components/uart/uart.h"
 
-struct eg1155_stats {
+struct __attribute__((packed)) eg1155_packet {
+	uint16_t magic;
+	uint8_t code;
+	uint16_t cmd;
+	uint8_t len;
+	uint8_t data[];
+};
+
+struct __attribute__((packed)) eg1155_stats {
 	uint16_t res1;
 	uint16_t res2;
 	uint16_t voltage;
@@ -33,6 +41,13 @@ struct eg1155_stats {
 	uint8_t res6;
 	uint8_t b_progress;
 };
+
+#define PUBLISH_SENSOR(name, val) \
+if (this->name##_sensor_) \
+	this->name##_sensor_->publish_state(val);
+#define PUBLISH_NUMBER(name, val) \
+if (this->set_##name##_number_) \
+	this->set_##name##_number_->publish_state(val);
 
 namespace esphome {
 namespace eg1155 {
@@ -76,6 +91,7 @@ protected:
 	uint32_t last_rx_char_timestamp_ = 0;
 	std::vector<uint8_t> rx_message_;
 	std::deque<std::vector<uint8_t>> pq;
+	bool initialized = false;
 
 	void handle_char_(uint8_t c);
 	bool validate_message_();
